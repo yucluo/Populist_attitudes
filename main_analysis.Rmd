@@ -1,0 +1,1016 @@
+---
+title: "Populism Data Analysis"
+author: "Yuchen Luo"
+date: "10/12/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(dplyr)
+library(foreign)
+library(haven)
+library(ggplot2)
+library(psych)
+library(ltm)
+library(gridExtra)
+library(survey)
+library(emmeans)
+library(stargazer)
+library(dotwhisker)
+
+library(tidyr)
+library(kableExtra)
+
+setwd("/Users/yuchenluo/Desktop/rw/")
+
+data2016 = read.csv("HARV0027_GenPop_OUTPUT.csv")
+data2020 = read_dta("NYUU0022_OUTPUT.dta")
+```
+## reverse coding
+```{r reverse coding}
+
+# 2016 ------
+data2016$q2 = 6 - data2016$Q152_2
+data2016$q3 = 6 - data2016$Q152_3
+data2016$q4 = 6 - data2016$Q152_4
+data2016$q5 = 6 - data2016$Q152_5
+
+# recode likely to vote
+data2016$likelihood2016 = ifelse(data2016$Q148 <6, 6- data2016$Q148, ifelse(data2016$Q148== 7, 5, NA))
+
+# 2020 ------
+data2020$q2 = 6 - data2020$Q51_2
+data2020$q3 = 6 - data2020$Q51_3
+data2020$q4 = 6 - data2020$Q51_4
+data2020$q5 = 6 - data2020$Q51_5
+
+data2020$likelihood2020 = ifelse(data2020$Q31 <6, 6- data2020$Q31, ifelse(data2020$Q31 == 6, 5, NA))
+```
+## factor analysis
+
+```{r factor analysis}
+
+## 2016 -------------------------
+data2016_factor= data2016 %>% dplyr::select(q2, q3, q4, q5)
+
+data2016_factor[data2016_factor <0] = NA
+# standardize
+data2016_factor = apply(data2016_factor, 2, function(x) scale(x, center=TRUE, scale=TRUE))
+
+data2016_factor_complete = data2016_factor[complete.cases(data2016_factor),] #not a lot of missing data!!
+
+### Extraction: how many factors?
+library(nFactors)
+ev <- eigen(cor(data2016_factor,use = "complete.obs"))
+ap <- parallel(subject = nrow(data2016_factor), var = ncol(data2016_factor), rep = 100, cent = .05)
+sc <- nScree (x = ev$values, ap$eigen$qevpea)
+plotnScree(sc)
+# Exploratory FACTOR ANALYSIS 
+# (method: MLE)
+# factanal <- factanal(data2016_factor_complete, factors = 2)
+# # check loadings
+# factanal
+# # or 
+# fa = fa(data2016_factor_complete, factors = 2)
+# fa
+# check alpha score
+alpha(data2016_factor_complete)
+
+
+
+## 2020 -----------------------
+data2020_factor= data2020 %>% dplyr::select(q2, q3, q4, q5)
+
+data2020_factor[data2020_factor < 0] = NA
+# standardize
+data2020_factor = apply(data2020_factor, 2, function(x) scale(x, center=TRUE, scale=TRUE))
+
+data2020_factor_complete = data2020_factor[complete.cases(data2020_factor),] # no missing data
+
+### Extraction: how many factors?
+ev <- eigen(cor(data2020_factor,use = "complete.obs"))
+ap <- parallel(subject = nrow(data2020_factor), var = ncol(data2020_factor), rep = 100, cent = .05)
+sc <- nScree (x = ev$values, ap$eigen$qevpea)
+plotnScree(sc)
+# Exploratory FACTOR ANALYSIS 
+# (method: MLE)
+factanal <- factanal(data2020_factor_complete, factors = 2)
+# check loadings
+factanal
+
+# check alpha score
+alpha(data2020_factor_complete)
+
+
+```
+
+```{r descriptives}
+# 2016 ---------
+setDT(data2016)
+# recode control variables
+  # race keep as it is 
+  # faminc
+data2016[, income := ifelse(faminc< 30, faminc, NA)]
+  #educ keep as it is 
+  # gender keep as it is
+  # ideo5
+data2016[, ideology := ifelse(ideo5< 6, ideo5, NA)]
+  # birth year
+data2016[, age := ifelse(dropdownbirthyr < 3000, 2021 - dropdownbirthyr, NA)]
+
+ ### descriptive data frame ----
+data2016_des = cbind(data2016_factor, data2016  %>% dplyr::select(caseid,weight, Q215,Q216, Q216A, Q217, Q217A, pid3, race, income, educ, gender,ideology, age, likelihood2016, Q42_1, Q42_2, Q42_4, Q42_5, Q42_6, Q42_7))
+
+setDT(data2016_des)
+
+# denote missing data
+data2016_des[data2016_des$pid3 >3, "pid3"] = NA
+data2016_des[data2016_des$Q215 >4, "Q215"] = NA
+
+# additive scale
+data2016_des$pop_score = data2016_des$q2 + data2016_des$q3 + data2016_des$q4 +data2016_des$q5
+
+
+
+
+## recode NA values
+data2016_des$time = 2016
+
+data2016_des[data2016_des$Q42_1 > 900, 'Q42_1'] = NA
+data2016_des[data2016_des$Q42_2 > 900, 'Q42_2'] = NA
+data2016_des[data2016_des$Q42_4 > 900, 'Q42_4'] = NA
+data2016_des[data2016_des$Q42_5 > 900, 'Q42_5'] = NA
+data2016_des[data2016_des$Q42_6 > 900, 'Q42_6'] = NA
+
+# racial sentiment addictive scale 
+data2016_des$race_thermo = data2016_des$Q42_1 + data2016_des$Q42_2 + data2016_des$Q42_4 + data2016_des$Q42_5 + data2016_des$Q42_6
+
+# weight
+data2016Design <- svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = data2016_des)
+
+# 2020 ----------
+setDT(data2020)
+# recode control variables
+# faminc_new1 is different from faminc answers
+# gender 2020 has "other" and 2016 does not
+# recode age too
+  # race stays the same
+data2020[, race := race1]
+  # faminc stays the same
+data2020[, income := faminc_new1]
+  # educ is the same
+data2020[, educ := educ1]
+  # gender
+data2020[, gender := ifelse(Q71_gender <3, Q71_gender, NA)]
+  # ideology
+data2020[, ideology := ifelse(ideo5<6, ideo5, NA)]
+  # birth year
+data2020[, age := 2021 - (birthyr1 + 1899)]
+
+data2020_des = cbind(data2020_factor, data2020  %>% dplyr::select(caseid_harv0027,caseid, weight_recontact,weight_fresh, ideology, race, income, educ, gender, ideology, age, Q32,Q41,Q46,Q47, party_id1,Q33_1, Q33_2, Q33_3, Q33_4, Q33_5, Q33_6, Q33_7, Q33_8, Q33_9, Q33_10, Q33_11, Q33_12, Q33_13, Q33_14, Q33_15, Q33_16, Q33_17, Q33_18, likelihood2020, weight_combined, Q38, Q17_hispanic, Q17_african, Q17_asian, Q17_jewish, Q17_muslim))
+setDT(data2020_des)
+# denote missing data
+data2020_des[data2020_des$party_id1 >3, "party_id1"] = NA
+data2020_des[data2020_des$Q41 >4, "Q41"] = NA
+
+# additive scale populist attitude
+data2020_des$pop_score = data2020_des$q2 + data2020_des$q3 + data2020_des$q4 +data2020_des$q5
+
+# code the 2016 party id
+data2020_des[, pid2016 := ifelse(Q46 == 1, Q47, party_id1)]
+
+data2020_des$time = 2020
+
+# recode missing values
+data2020_des[data2020_des$Q17_hispanic > 900, 'Q17_hispanic'] = NA
+data2020_des[data2020_des$Q17_african > 900, 'Q42_african'] = NA
+data2020_des[data2020_des$Q17_asian > 900, 'Q17_asian'] = NA
+data2020_des[data2020_des$Q17_jewish > 900, 'Q17_jewish'] = NA
+data2020_des[data2020_des$Q17_muslim > 900, 'Q17_muslim'] = NA
+
+data2020_des$race_thermo = data2020_des$Q17_hispanic + data2020_des$Q17_african + data2020_des$Q17_asian + data2020_des$Q17_jewish + data2020_des$Q17_muslim
+
+# # weight
+data2020Design <- svydesign(id      = ~caseid,
+                          weights = ~weight_combined,
+                          data    = data2020_des)
+
+
+setDT(data2016_des)
+setDT(data2020_des)
+
+
+
+# make a dataframe for plotting -----
+line_df = data.frame(time = c('2016', "2020"),
+                avg_score = c(svymean(~pol_pop, subset(data2016Design,pid3 == 1), na.rm = T),
+                              svymean(~pol_pop, subset(data2020Design,party_id1==1 ), na.rm = T), #dems
+                              svymean(~pol_pop, subset(data2016Design,pid3 == 2), na.rm = T),
+                              svymean(~pol_pop, subset(data2020Design,party_id1== 2), na.rm = T), #reps
+                              svymean(~pol_pop, subset(data2016Design,Q215 == 2), na.rm = T),
+                              svymean(~pol_pop, subset(data2020Design,Q41 == 2), na.rm = T),
+                              # trump voter of 2016
+                              svymean(~pol_pop, subset(data2016Design,Q217A == 2), na.rm = T),
+                              svymean(~pol_pop, subset(data2020Design,Q38 == 2), na.rm = T)),
+                     ci_lower =  c(confint(svymean(~pol_pop, subset(data2016Design,pid3 == 1), na.rm = T))[1,1],
+                              confint(svymean(~pol_pop, subset(data2020Design,party_id1==1 ), na.rm = T))[1,1], #dems
+                              confint(svymean(~pol_pop, subset(data2016Design,pid3 == 2), na.rm = T))[1,1],
+                              confint(svymean(~pol_pop, subset(data2020Design,party_id1== 2), na.rm = T))[1,1], #reps
+                              confint(svymean(~pol_pop, subset(data2016Design,Q215 == 2), na.rm = T))[1,1],
+                              confint(svymean(~pol_pop, subset(data2020Design,Q41 == 2), na.rm = T))[1,1],# trump voter of 2016
+                              confint(svymean(~pol_pop, subset(data2016Design,Q217A == 2), na.rm = T))[1,1],
+                              confint(svymean(~pol_pop, subset(data2020Design,Q38 == 2), na.rm = T))[1,1]),
+                ci_higher =  c(confint(svymean(~pol_pop, subset(data2016Design,pid3 == 1), na.rm = T))[1,2],
+                              confint(svymean(~pol_pop, subset(data2020Design,party_id1==1 ), na.rm = T))[1,2], #dems
+                              confint(svymean(~pol_pop, subset(data2016Design,pid3 == 2), na.rm = T))[1,2],
+                              confint(svymean(~pol_pop, subset(data2020Design,party_id1== 2), na.rm = T))[1,2], #reps
+                              confint(svymean(~pol_pop, subset(data2016Design,Q215 == 2), na.rm = T))[1,2],
+                              confint(svymean(~pol_pop, subset(data2020Design,Q41 == 2), na.rm = T))[1,2],# trump voter of 2016
+                              confint(svymean(~pol_pop, subset(data2016Design,Q217A == 2), na.rm = T))[1,2],
+                              confint(svymean(~pol_pop, subset(data2020Design,Q38 == 2), na.rm = T))[1,2]),
+                  groups = c(rep("Democrats",2), rep("Republicans",2), rep("Trump Voters", 2), rep("Bernie Voters", 2) )
+)
+
+       
+ggplot(line_df, aes(x=time, y=avg_score, group=groups, color=groups)) + 
+  geom_line() +
+  geom_point()+ geom_errorbar(aes(ymin=ci_lower, ymax=ci_higher), width=.2,
+                 position=position_dodge(0.05)) + ylab("Political Populism Score") + scale_color_manual(values=c("navyblue","skyblue", "red1", "red4"))
+
+
+
+  
+```
+
+```{r panel data construction}
+
+# match id across waves
+data_panel = data2016_des[data2016_des$caseid %in% data2020$caseid_harv0027,] 
+
+panel_2020 = data2020_des %>% filter(!is.na(caseid_harv0027)) %>% dplyr::select(q2, q3, q4, q5, caseid_harv0027,caseid, weight_recontact,weight_fresh, Q32,Q41,Q46,Q47, party_id1,Q33_1, Q33_2, Q33_3, Q33_4, Q33_5, Q33_6, Q33_7, Q33_8, Q33_9, Q33_10, Q33_11, Q33_12, Q33_13, Q33_14, Q33_15, Q33_16, Q33_17, Q33_18, likelihood2020, pop_score)
+
+data_panel = left_join(data_panel, panel_2020, by = c("caseid" = "caseid_harv0027"))
+
+colnames(data_panel)[which(names(data_panel) %in% c("q2.x", "q3.x", "q4.x", "q5.x"))] = c("q2_2016", "q3_2016", "q4_2016", "q5_2016")
+colnames(data_panel)[which(names(data_panel) %in% c("q2.y", "q3.y", "q4.y", "q5.y"))] = c("q2_2020", "q3_2020", "q4_2020", "q5_2020")
+data_panel$pop_2016 = data_panel$pop_score.x
+data_panel$pop_2020 = data_panel$pop_score.y
+setDT(data_panel)
+
+  # write.csv(data_panel, "data_panel.csv")
+
+# # have to seperate into two dfs to apply two different weights
+panel_1st_wave = data_panel %>% dplyr::select(caseid, weight, Q215, Q216, Q216A,Q217, Q217A, pid3,q2_2016, q3_2016, q4_2016, q5_2016, pop_2016)
+panel2016_weighted <- svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = panel_1st_wave)
+
+panel_2st_wave = data_panel %>% dplyr::select(caseid, weight_recontact, Q215,Q216, Q216A,Q217, Q217A, pid3,q2_2020, q3_2020, q4_2020, q5_2020, pop_2020)
+panel2020_weighted <- svydesign(id      = ~caseid,
+                          weights = ~weight_recontact,
+                          data    = panel_2st_wave)
+
+# Panel plots ----------------------------
+
+# make a dataframe for table ----
+des_df_panel = data.frame(time = c('2016', "2020"),
+                         ####--
+                avg_score = c(svymean(~pop_2016, subset(panel2016_weighted,Q216A == 1), na.rm = T), # Primary Trumpers
+                              svymean(~pop_2020, subset(panel2020_weighted,Q216A == 1), na.rm = T), # Primary Trumpers
+                              
+                              svymean(~pop_2016, subset(panel2016_weighted,Q216 == 1 & Q216A != 1), na.rm = T), # Other Republicans 
+                              svymean(~pop_2020, subset(panel2020_weighted,Q216 == 1 & Q216A != 1), na.rm = T), # Other Republicans 
+                              svymean(~pop_2016, subset(panel2016_weighted,Q217A == 2), na.rm = T), #Bernie voters
+                              svymean(~pop_2020, subset(panel2020_weighted,Q217A == 2), na.rm = T), #Bernie voters
+                              svymean(~pop_2016, subset(panel2016_weighted,Q217== 1 & Q217A != 2), na.rm = T), # Other Dems
+                              svymean(~pop_2020, subset(panel2020_weighted,Q217== 1 & Q217A != 2), na.rm = T)), # Other Dems
+                
+                                         ####--
+
+                sd = c(svysd(~pop_2016, subset(panel2016_weighted,Q216A == 1), na.rm = T), # Primary Trumpers
+                              svysd(~pop_2020, subset(panel2020_weighted,Q216A == 1), na.rm = T), # Primary Trumpers
+                              
+                              svysd(~pop_2016, subset(panel2016_weighted,Q216 == 1 & Q216A != 1), na.rm = T), # Other Republicans 
+                              svysd(~pop_2020, subset(panel2020_weighted,Q216 == 1 & Q216A != 1), na.rm = T), # Other Republicans 
+                              svysd(~pop_2016, subset(panel2016_weighted,Q217A == 2), na.rm = T), #Bernie voters
+                              svysd(~pop_2020, subset(panel2020_weighted,Q217A == 2), na.rm = T), #Bernie voters
+                              svysd(~pop_2016, subset(panel2016_weighted,Q217== 1 & Q217A != 2), na.rm = T), # Other Dems
+                              svysd(~pop_2020, subset(panel2020_weighted,Q217== 1 & Q217A != 2), na.rm = T)), # Other Dems
+                             
+                  groups = c(rep("Primary Trumpers",2), rep("Other Reps",2), rep("Sanders Voters", 2), rep("Other Dems", 2) )
+)
+
+# write.csv(des_df_panel,"panel_des.csv")
+
+des_df_panel_wide = des_df_panel%>%    pivot_wider(names_from = groups, values_from = c(avg_score, sd))
+
+
+ggplot(line_df_panel, aes(x=time, y=avg_score, group=groups, color=groups)) + 
+  geom_line() +
+  geom_point()+ geom_errorbar(aes(ymin=ci_lower, ymax=ci_higher), width=.2,
+                 position=position_dodge(0.05)) + ylab("Political Populism Score") +
+scale_color_manual(values=c("navyblue","skyblue", "pink", "red1", "red4"))
+
+# make a dataframe for descriptive table ----
+des_df = data.frame(time = c('2016', "2020"),
+                avg_score = c(
+                              svymean(~pop_score, subset(data2016Design,Q215 == 2), na.rm = T), #trump voters
+                              svymean(~pop_score, subset(data2020Design,Q41 == 2), na.rm = T), # trump voter of 2016
+
+                              svymean(~pop_score, subset(data2016Design,Q215 != 2), na.rm = T),
+                              svymean(~pop_score, subset(data2020Design,Q41 != 2), na.rm = T)), # all others
+                              sd = c(svysd(~pop_score, subset(data2016Design,Q215 == 2), na.rm = T), #trump voters
+                              svysd(~pop_score, subset(data2020Design,Q41 == 2), na.rm = T), # trump voter of 2016
+
+                              svysd(~pop_score, subset(data2016Design,Q215 != 2), na.rm = T),
+                              svysd(~pop_score, subset(data2020Design,Q41 != 2), na.rm = T)),
+                             
+                  groups = c(rep("Trump Voters",2), rep("All Others",2)#, rep("Trump Voters", 2), rep("Bernie Voters", 2) )
+))
+                
+                
+des_df_wide = des_df %>% pivot_wider(names_from = groups, values_from = c(avg_score, sd))                
+
+des_df_all = left_join(des_df_panel_wide, des_df_wide, by = "time")
+des_df_all = des_df_all[, c("time","avg_score_Primary Trumpers", "sd_Primary Trumpers","avg_score_Other Reps","sd_Other Reps","avg_score_Sanders Voters",  "sd_Sanders Voters","avg_score_Other Dems",  "sd_Other Dems","avg_score_Trump Voters","sd_Trump Voters", "avg_score_All Others", "sd_All Others"  )]       
+
+## get Latex code ---
+kbl(des_df_all, format = "latex", digits = 2) %>%
+  kable_minimal() %>%
+  add_header_above(c(" " = 1, "Primary Election" = 8, "General Election" = 4))
+
+
+# check individual items to make sure not a single item is driving the trend
+# Bernie Voters
+p_bernie = ggplot(bernie_voters_des, aes(x = time))+
+  geom_line(aes(y = q1,colour= "Right/wrong"))+    
+  geom_line(aes(y = q2,colour= "rich_control_party"))+  
+  geom_line(aes(y = q3,colour= "system_against"))+ 
+  geom_line(aes(y = q4,colour= "ppl_control_pol"))+ 
+  geom_line(aes(y = q5,colour= "anti_elites"))+ 
+  geom_line(aes(y = q6,colour= "ppl_over_expert"))+ 
+  geom_line(aes(y = q7,colour= "science_dont_help"))+ 
+  geom_line(aes(y = q8,colour= "ppl_need_expert"))+ 
+  scale_colour_manual(name="Question",values=cols) + ggtitle("Sanders Voters")
+  
+```
+
+```{r regression}
+# use 2016 weight
+panel_2016 = data_panel %>% dplyr::select(caseid, weight, q2_2016,q3_2016,q4_2016,q5_2016,pop_2016, Q215, Q216A, Q217A, pid3)
+panel_2016$time = 2016
+panel_2020 = data_panel %>% dplyr::select(caseid, weight, q2_2020,q3_2020,q4_2020,q5_2020,pop_2020, Q215, Q216A, Q217A, pid3)
+panel_2020$time = 2020
+
+panel_data = rbind(panel_2016, panel_2020, use.names=FALSE)
+colnames(panel_data)[3:7] = c("q2", "q3", "q4", "q5", "pop_score")
+
+panel_data[,  trump_voter := ifelse(Q215 == 2, 1, 0)]
+panel_data[, bernie_voter := ifelse(Q217A == 2 & Q215 != 2, 1, 0)]
+panel_data[, non_trump_rep := ifelse(Q216A > 1 & pid3 == 2, 1, 0)]
+panel_data[, non_bernie_dem := ifelse(Q217A != 2 & pid3 ==1, 1, 0)]
+panel_data[, primary_r := ifelse(Q216A == 1, "Trump", ifelse(Q216A < 98, "Others", NA )) ]
+
+panel_data[, c("pid3", "time")] = lapply(panel_data[, c("pid3", "time")],factor)
+
+panel_data_weighted = svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = panel_data)
+
+m1 = svyglm(pop_score ~
+                       pid3 + trump_voter*time + bernie_voter*time + non_trump_rep*time + non_bernie_dem*time,
+          data   = panel_data,
+          design = panel_data_weighted)
+
+m2 = svyglm(pop_score ~
+                       primary_r*time,
+          data   = panel_data,
+          design = panel_data_weighted)
+
+# test interactions for m2
+emcatcat <- emmeans(m2, ~ primary_r*time)
+contrast(emcatcat, "pairwise",by="time",adjust="none")
+
+# null model for calculating r^2
+summary(nullmodel<-svyglm(pop_score~1,design=panel_data_weighted))
+
+# caculate r^2
+1- 9.622715/11.2334
+
+### change score analysis ---- 
+data_panel$delta = data_panel$pop_2020 - data_panel$pop_2016
+
+
+## sensitivity analysis ---
+data_panel$delta1 = data_panel$q3_2020 + data_panel$q4_2020 + data_panel$q5_2020 - ( data_panel$q3_2016 + data_panel$q4_2016 + data_panel$q5_2016)
+
+data_panel$delta2 = data_panel$q2_2020 + data_panel$q4_2020 + data_panel$q5_2020 - ( data_panel$q2_2016 + data_panel$q4_2016 + data_panel$q5_2016)
+
+data_panel$delta3 = data_panel$q2_2020 + data_panel$q3_2020 + data_panel$q5_2020 - ( data_panel$q2_2016 + data_panel$q3_2016 + data_panel$q5_2016)
+
+data_panel$delta4 = data_panel$q2_2020 + data_panel$q3_2020 + data_panel$q4_2020 - ( data_panel$q2_2016 + data_panel$q3_2016 + data_panel$q4_2016)
+#-------------------------------------------------------
+
+data_panel[,  trump_voter := ifelse(Q215 == 2, 1, 0)]
+data_panel[, bernie_voter := ifelse(Q217A == 2 & Q215 != 2, 1, 0)]
+data_panel[, non_trump_rep := ifelse(Q216A > 1 & pid3 == 2, 1, 0)]
+data_panel[, non_bernie_dem := ifelse(Q217A != 2 & pid3 ==1, 1, 0)]
+data_panel[, primary_r := ifelse(Q216A == 1, "Trump", ifelse(Q216A < 98, "Others", NA )) ]
+data_panel[, primary_d := ifelse(Q217A == 2, "Sanders", ifelse(Q217A < 98, "Others", NA )) ]
+
+data_CS_weighted = svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = data_panel)
+m3_SC = svyglm(delta ~
+                       primary_d + as.factor(race) + as.factor(educ) + as.factor(gender) + age + income + race_thermo,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(m3_SC$coefficients)[2:14] <- c("Vote for Sanders", 'Black','Hispanic','Asian', "Native American", "Mixed", "Other", "HS", "Some College", "2-yr", "4-yr", "Post-grad", "Female")
+summary(m3_SC)
+
+m4_SC = svyglm(delta ~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income + race_thermo,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(m4_SC$coefficients)[2:14] <- c("Vote for Trump", 'Black','Hispanic','Asian', "Native American", "Mixed", "Other", "HS", "Some College", "2-yr", "4-yr", "Post-grad", "Female")
+summary(m4_SC)
+
+m4_SC_vanilla = svyglm(delta ~
+                       primary_r,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(m4_SC_vanilla$coefficients)[2] <- c("Vote for Trump")
+summary(m4_SC_vanilla)
+
+stargazer(m4_SC_vanilla, m4_SC, ttype = "latex", title = "Change Score Model Predicting the Difference between 2016 and 2020 Populism Score (standardized, t2-t1)")
+
+stargazer( m4_SC, ttype = "latex", title = "Change Score Model Predicting the Difference between 2016 and 2020 Populism Score (standardized, t2-t1)")
+
+
+
+## sensitivity analysis results ---
+SA_vanilla1 = svyglm(delta1 ~
+                       primary_r,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(SA_vanilla1$coefficients)[2] <- c("Vote for Trump")
+summary(SA_vanilla1)
+
+
+SA_vanilla2 = svyglm(delta2 ~
+                       primary_r,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(SA_vanilla2$coefficients)[2] <- c("Vote for Trump")
+summary(SA_vanilla2)
+
+SA_vanilla3 = svyglm(delta3 ~
+                       primary_r,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(SA_vanilla3$coefficients)[2] <- c("Vote for Trump")
+summary(SA_vanilla3)
+
+SA_vanilla4 = svyglm(delta4 ~
+                       primary_r,
+          data   = data_panel,
+          design = data_CS_weighted)
+names(SA_vanilla4$coefficients)[2] <- c("Vote for Trump")
+summary(SA_vanilla4)
+
+stargazer(SA_vanilla1, SA_vanilla2, SA_vanilla3, SA_vanilla4, ttype = "latex", title = "Sensitivity Analysis: Change Score Model Predicting the Difference between 2016 and 2020 Populism Score (dropping one question in each model) ")
+
+# PLOT DOT AND WHISKER ----
+m4_SC_df <-
+    broom::tidy(m4_SC) %>% filter(term == "Vote for Trump") %>% mutate(model = "Republican Primary")
+                                  
+m3_SC_df <-
+    broom::tidy(m3_SC) %>% filter(term == "Vote for Sanders") %>% mutate(model = "Democratic Primary")
+
+primary_election_models <- rbind(m3_SC_df, m4_SC_df)
+dw2 = dwplot(primary_election_models, ci = 0.95,vline = geom_vline(
+           xintercept = 0,
+           colour = "grey60",
+           linetype = 2)
+           )   +
+  xlab('Standardized Coeffifient on Change in Populist Attitudes (2020 - 2016)')  + theme(
+        legend.position = c(0.007, 0.5),
+        legend.justification = c(0, 0),
+        legend.background = element_rect(colour = "grey80"),
+                legend.title.align = .5
+    ) + ggtitle("Primary Election") + xlim(c(-2.6, 1.5)) + scale_color_manual(
+    values  = c("black", "grey"))
+
+
+## Histogram of delta ----
+ggplot(subset(data_panel, !is.na(primary_r)), aes(x=delta, color=primary_r)) +
+  geom_histogram(fill="white")
+
+### USE CROSS SECTIONAL POOLED OLS ----
+data2016_xsection = data2016_des%>% dplyr::select(caseid, weight, Q215, pid3, pop_score, time, race, income, educ, gender, ideology, age, q2, q3, q4, q5, race_thermo)
+data2020_xsection = data2020_des %>% dplyr::select(caseid, weight_fresh, Q41, pid2016, pop_score, time,race, income, educ, gender, ideology, age, q2, q3, q4, q5, race_thermo) %>% filter(!is.na(weight_fresh))
+
+data2016_xsection = sapply(data2016_xsection,as.numeric)
+data2020_xsection = sapply(data2020_xsection,as.numeric)
+
+data_xsection = rbind(data2016_xsection, data2020_xsection, use.names=F)
+
+data_xsection = setDT(data.frame(data_xsection))
+# drop the last row of 2020 data cuz somehow it is all zero??
+data_xsection = head(data_xsection, -1)
+
+data_xsection[, trump_voter := ifelse(Q215 == 2, 1, 0)]
+# data_xsection[, c("pid3", "time")] = lapply(data_xsection[, c("pid3", "time")],factor)
+# data_xsection <- within(data_xsection, time <- relevel(time, ref = "2016"))
+
+# drop missing data
+data_xsection = data_xsection[complete.cases(data_xsection), ]
+
+data_xsection$SA1 = data_xsection$pop_score - data_xsection$q2
+data_xsection$SA2 = data_xsection$pop_score - data_xsection$q3
+data_xsection$SA3 = data_xsection$pop_score - data_xsection$q4
+data_xsection$SA4 = data_xsection$pop_score - data_xsection$q5
+
+### TABLE S1-----
+xsection_design = svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = data_xsection)
+
+d1 = data.frame(svymean(~ as.factor(race) + as.factor(educ) + income + age, subset(xsection_design, time ==2016 & trump_voter == 1, na.rm = T)))
+
+d2 = data.frame(svymean(~ as.factor(race) + as.factor(educ) + income + age, subset(xsection_design, time ==2016 & trump_voter == 0, na.rm = T)))
+ 
+d3 = data.frame(svymean(~ as.factor(race) + as.factor(educ) + income + age, subset(xsection_design, time ==2020 & trump_voter == 1, na.rm = T)))
+
+d4 = data.frame(svymean(~ as.factor(race) + as.factor(educ) + income + age, subset(xsection_design, time ==2020 & trump_voter == 0, na.rm = T)))
+
+
+xsetion_2016des = merge(d1,d2, by = 'row.names', all = T)
+xsetion_2020des = merge(d3,d4, by = 'row.names', all = T)
+xsetion_des = merge(xsetion_2016des, xsetion_2020des, by = 'Row.names', all = T)
+
+xsetion_des %>%
+  kbl(format = "latex", digits = 2) %>%
+  kable_classic_2() %>%
+add_header_above(c(" " = 1, "Trump Voters" = 2, "Others" = 2, "Trump Voters" = 2, "Others" = 2))  %>%
+add_header_above(c(" " = 1, "2016" = 4, "2020" = 4))
+
+data_xsection$trump_voter =  as.factor(data_xsection$trump_voter) 
+data_xsection$time =  as.factor(data_xsection$time)
+
+
+# regression ---- 
+m6_CS = lm(pop_score ~ time*trump_voter + as.factor(race)+ as.factor(educ) + as.factor(gender)  + age  + income + race_thermo , data = data_xsection, weights = weight)
+names(m6_CS$coefficients)[2:20] <- c("Post 2016","Vote for Trump",'Black','Hispanic','Asian', "Native American", "Mixed","Other","Middle Eastern", "HS", "Some College", "2-yr", "4-yr", "Post-grad", "Female", "Age", "Income", "racial sentiment", "Post 2016 X Vote for Trump")
+summary(m6_CS)
+
+stargazer(m6_CS, type = "latex")
+#### plot interaction
+plot_model(m6_CS, type = "pred", terms = c("time", "trump_voter"))
+
+m6_CS_vanilla = lm(pop_score ~ factor(time)*trump_voter , data = data_xsection, weights = weight)
+names(m6_CS_vanilla$coefficients)[2:4] <- c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")
+summary(m6_CS_vanilla)
+
+
+### sensitivity analysis -------
+SA1_CS_vanilla = lm(SA1 ~ factor(time)*trump_voter , data = data_xsection, weights = weight)
+names(SA1_CS_vanilla$coefficients)[2:4] <- c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")
+summary(SA1_CS_vanilla)
+
+SA2_CS_vanilla = lm(SA2 ~ factor(time)*trump_voter , data = data_xsection, weights = weight)
+names(SA2_CS_vanilla$coefficients)[2:4] <- c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")
+summary(SA2_CS_vanilla)
+
+SA3_CS_vanilla = lm(SA3 ~ factor(time)*trump_voter , data = data_xsection, weights = weight)
+names(SA3_CS_vanilla$coefficients)[2:4] <- c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")
+summary(SA3_CS_vanilla)
+
+SA4_CS_vanilla = lm(SA4 ~ factor(time)*trump_voter , data = data_xsection, weights = weight)
+names(SA4_CS_vanilla$coefficients)[2:4] <- c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")
+summary(SA4_CS_vanilla)
+
+stargazer(SA1_CS_vanilla, SA2_CS_vanilla, SA3_CS_vanilla, SA4_CS_vanilla, ttype = "latex", title = "Pooled OLS Model Predicting Populism Score (standardized)")
+
+### TABLE S2 ----
+stargazer(m6_CS_vanilla, m6_CS, ttype = "latex", title = "Pooled OLS Model Predicting Populism Score (standardized)")
+
+# PLOT DOT AND WHISKER ----
+m6_CS_df <-
+    broom::tidy(m6_CS) %>% filter(term %in% c("Post 2016","Vote for Trump", "Post 2016 X Vote for Trump")) %>% mutate(model = "Model 1")
+                                  
+dw1 = dwplot(m6_CS_df,  vline = geom_vline(
+           xintercept = 0,
+           colour = "grey60",
+           linetype = 2)) + xlab('Standardized Coeffifient on Populist Attitudes') + ggtitle("General Election") + xlim(c(-2.6,1.5)) +  scale_color_manual(
+    values  = c("black", "grey"))
+
+gA <- ggplotGrob(dw1)
+gB <- ggplotGrob(dw2)
+grid::grid.newpage()
+grid::grid.draw(rbind(gA, gB))
+
+# grid.arrange(dw1, dw2, 
+#              ncol = 1, nrow = 2)
+```
+
+```{r approval}
+
+### Approval Rating and Populism ----
+
+# reverse code approval items
+data_panel[, overall_appr := 5 - Q32]
+data_panel[, appr_covid := 5 - Q33_1]
+data_panel[, appr_race := 5 - Q33_2]
+data_panel[, appr_china := 5 - Q33_3]
+data_panel[, appr_crime := 5 - Q33_4]
+data_panel[, appr_educ := 5 - Q33_5]
+data_panel[, appr_iran := 5 - Q33_6]
+data_panel[, appr_Nkorea := 5 - Q33_7]
+data_panel[, appr_russia := 5 - Q33_8]
+data_panel[, appr_media := 5 - Q33_9]
+data_panel[, appr_tax := 5 - Q33_10]
+data_panel[, appr_environment := 5 - Q33_11]
+data_panel[, appr_unemployment := 5 - Q33_12]
+data_panel[, appr_economy := 5 - Q33_13]
+data_panel[, appr_trade := 5 - Q33_14]
+data_panel[, appr_healthcare := 5 - Q33_15]
+data_panel[, appr_immigration := 5 - Q33_16]
+data_panel[, appr_corruption := 5 - Q33_17]
+data_panel[, appr_terrorism := 5 - Q33_18]
+
+data_panel[data_panel == 0] = NA
+
+
+data_panel_complete = data_panel %>% drop_na(overall_appr, race, educ, gender, income, age)
+# weight
+data_CS_approval_weighted = svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = data_panel_complete)
+trump_voters = subset(data_CS_approval_weighted, trump_voter == 1) # General Trumpers
+
+
+## Get descriptives table ----
+des_appr_panel = data.frame(
+svymean(~overall_appr + as.factor(trump_voter) + as.factor(race) + as.factor(educ) + income + age, trump_voters, na.rm = T)                
+)
+kbl(des_appr_panel, format = "latex") %>%
+  kable_classic() 
+## Regression ----
+m1_CS_appr_overall = svyglm(delta ~ overall_appr + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+names(m1_CS_appr_overall$coefficients)[2:14] <- c("Approval", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+summary(m1_CS_appr_overall)
+
+m2_CS_appr_overall_bare = svyglm(delta ~ overall_appr,
+          data   = data_panel,
+          design = trump_voters)
+names(m2_CS_appr_overall_bare$coefficients)[2] <- "Approval"
+
+# check approval on specific issues
+m2_CS_appr_issues = svyglm(delta ~ appr_covid + appr_race + appr_china + appr_crime + appr_educ + appr_iran + appr_Nkorea + appr_russia + appr_media + appr_tax + appr_environment + appr_unemployment + appr_economy + appr_trade + appr_healthcare + appr_immigration + appr_corruption + appr_terrorism,
+          design = trump_voters)
+
+summary(m2_CS_appr_issues)
+
+m3_corru = svyglm(delta ~  appr_corruption  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+names(m3_corru$coefficients)[3:14] <- c('black','hispanic','asian', "native american", "mixed","other", "HS", "some college", "2-yr", "4-yr", "post-grad", "female")
+summary(m3_corru)
+
+m4_immi = svyglm(delta ~  appr_immigration  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+names(m4_immi$coefficients)[3:14] <- c('black','hispanic','asian', "native american", "mixed","other", "HS", "some college", "2-yr", "4-yr", "post-grad", "female")
+summary(m4_immi)
+
+m5_nkorea = svyglm(delta ~  appr_Nkorea  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+names(m5_nkorea$coefficients)[3:14] <- c('black','hispanic','asian', "native american", "mixed","other", "HS", "some college", "2-yr", "4-yr", "post-grad", "female")
+summary(m5_nkorea)
+
+m6_covid = svyglm(delta ~  appr_covid  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+names(m6_covid$coefficients)[3:14] <- c('black','hispanic','asian', "native american", "mixed","other", "HS", "some college", "2-yr", "4-yr", "post-grad", "female")
+summary(m6_covid)
+
+m7_race = svyglm(delta ~  appr_race  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+summary(m7_race)
+
+m8_china = svyglm(delta ~  appr_china  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+summary(m8_china)
+
+m9_terrorism = svyglm(delta ~  appr_terrorism  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+
+m10_media = svyglm(delta ~  appr_media  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+
+m11_econ = svyglm(delta ~  appr_economy  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+
+m12_unemploy = svyglm(delta ~  appr_unemployment  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+
+m13_environment = svyglm(delta ~  appr_environment + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters)
+
+m3_df <-
+    broom::tidy(m3_corru)[2,]
+m4_df <-
+    broom::tidy(m4_immi)[2,]
+m5_df = broom::tidy(m5_nkorea)[2,]
+m6_df = broom::tidy(m6_covid)[2,]
+m7_df = broom::tidy(m7_race)[2,]
+m8_df = broom::tidy(m8_china)[2,]
+m9_df = broom::tidy(m9_terrorism)[2,]
+m10_df = broom::tidy(m10_media)[2,]
+m11_df = broom::tidy(m11_econ)[2,]
+m12_df = broom::tidy(m12_unemploy)[2,]
+m13_df = broom::tidy(m13_environment)[2,]
+
+
+many_models <- rbind(m3_df, m4_df, m5_df, m6_df, m7_df, m8_df, m9_df, m10_df, m11_df, m12_df, m13_df)
+
+dwplot(many_models, ci = 0.95, vline = geom_vline(
+           xintercept = 0,
+           colour = "grey60",
+           linetype = 2)) + scale_color_manual(
+    values  = "black") + xlab("Change in anti-elite sentiment (2020 - 2016)")
+
+
+```
+
+
+
+```{r ANES robustness check}
+anes2016 = read_dta("anes_timeseries_2016.dta")
+anes2020 = read.csv("anes_timeseries_2020_csv_20210719.csv")
+setDT(anes2016)
+setDT(anes2020)
+
+anes2016[anes2016 < 0] = NA
+anes2020[anes2020 <0] = NA
+
+# recode control vars
+anes2016[, trump_voter := ifelse(V161064x %in% c(11, 21), 1,0)]
+anes2016[, race :=ifelse(V161310x > 0,V161310x ,NA) ]
+anes2016[, educ := ifelse(V161270 <90, V161270, NA)]
+anes2016[, gender := ifelse(V161342 >0 , V161342, NA)]
+anes2016[, income := ifelse(V161361x>0, V161361x, NA)]
+anes2016[, age := ifelse(V161267 >0, V161267, NA)]
+# recode DV
+anes2016$trust_pre = anes2016$V161215 # good
+anes2020$trust_pre = anes2020$V201233 # good
+anes2016$bigint_pre = 3 - anes2016$V161216 # good
+anes2016$corrupt_pre = 6 - anes2016$V161218 # good 
+anes2020$bigint_pre = 3 - anes2020$V201234 # good
+anes2020$corrupt_pre = 6 - anes2020$V201236 # good 
+
+anes2016[, c("trust_pre", "bigint_pre", "corrupt_pre")] = as.data.frame(apply(anes2016 %>% dplyr::select(trust_pre, bigint_pre, corrupt_pre), 2, function(x) scale(x, center=TRUE, scale=TRUE)))
+anes2020[, c("trust_pre", "bigint_pre", "corrupt_pre")] = as.data.frame(apply(anes2020 %>% dplyr::select(trust_pre, bigint_pre, corrupt_pre), 2, function(x) scale(x, center=TRUE, scale=TRUE)))
+
+anes2016[, pop_score := trust_pre + bigint_pre + corrupt_pre]
+anes2020[, pop_score_2020 := trust_pre + bigint_pre + corrupt_pre]
+
+anes2016$time = 2016
+anes2020$time = 2020
+
+# recode approval measures
+anes2020[, overall_appr := ifelse(V201129x >0, 5-V201129x, NA)]
+
+anes2020[, appr_economy := ifelse(V201132x >0, 5-V201132x, NA)]
+
+anes2020[, appr_foreign := ifelse(V201135x >0, 5-V201135x, NA)]
+
+anes2020[, appr_immigration := ifelse(V201141x >0, 5-V201135x, NA)]
+
+anes2020[, appr_covid := ifelse(V201144x >0, 5-V201144x, NA)]
+
+
+# make the panel data frame
+panel_id = anes2020$V160001_orig[anes2020$V160001_orig>0]
+anes_panel = left_join(anes2016 %>% filter(V160001_orig %in% panel_id) %>% dplyr::select(V160001_orig, V160101,trump_voter, race, educ, gender, income, age, pop_score), anes2020%>% filter(V160001_orig %in% panel_id) %>% dplyr::select(V160001_orig, overall_appr, appr_economy, appr_foreign, appr_immigration, appr_covid, pop_score_2020), by = "V160001_orig")
+
+anes_panel[, delta := pop_score_2020 - pop_score]
+
+# recode educ for pretty table
+anes_panel[, education := ifelse(educ < 9, 1, ifelse(educ == 9, 2, ifelse(educ == 10, 3, ifelse(educ < 13, 4, ifelse(educ< 14, 5, 6)) )))]
+
+
+anes_panel_complete = anes_panel %>% drop_na(overall_appr, race, education, gender, income, age)
+
+
+# weight
+anes_CS_approval_weighted = svydesign(id      = ~V160001_orig,
+                          weights = ~V160101,
+                          data    = anes_panel_complete)
+trump_voters_anes = subset(anes_CS_approval_weighted, trump_voter == 1)
+
+m1_CS_appr_overall_anes = svyglm(delta ~ overall_appr + as.factor(race) + as.factor(education) + as.factor(gender) + income + age,
+          design = trump_voters_anes)
+names(m1_CS_appr_overall_anes$coefficients)[2:13] = c("Approval", 'Black','Asian', "Native American",'Hispanic', "Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+m1_CS_appr_bare_anes = svyglm(delta ~ overall_appr,
+          design = trump_voters_anes)
+names(m1_CS_appr_bare_anes$coefficients)[2] = "Approval"
+
+#### regression table ----
+stargazer( m2_CS_appr_overall_bare,m1_CS_appr_overall, m1_CS_appr_bare_anes, m1_CS_appr_overall_anes,type = "latex", 
+           title = "Change Model Predicting the Difference between 2016 and 2020 Populism Score (standardized, t2-t1)",
+           # column.labels = c("Without Control", "With Controls","Without Control", "With Controls"), 
+           column.labels   = c("YouGov", "ANES"),
+          column.separate = c(2, 2),
+          dep.var.labels  = "Change in Populism (t2-t1)")
+
+
+m2_immi = svyglm(delta ~  appr_immigration  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          design = trump_voters_anes)
+
+
+m3_foreign = svyglm(delta ~  appr_foreign  + as.factor(race) + educ + as.factor(gender) + income + age,
+          design = trump_voters_anes)
+
+m4_covid = svyglm(delta ~  appr_covid  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          design = trump_voters_anes)
+
+m5_econ = svyglm(delta ~  appr_economy  + as.factor(race) + as.factor(educ) + as.factor(gender) + income + age,
+          data   = data_panel,
+          design = trump_voters_anes)
+
+m2_df = broom::tidy(m2_immi)[2,]
+m3_df = broom::tidy(m3_foreign)[2,]
+m4_df = broom::tidy(m4_covid)[2,]
+m5_df = broom::tidy(m5_econ)[2,]
+
+many_models = rbind(m2_df, m3_df, m4_df, m5_df)
+
+dwplot(many_models, ci = 0.95) + ggtitle("ANES models")
+
+print(svymean(~pop_score + pop_score_2020,design = trump_voters_anes, na = TRUE))
+print(svysd(~pop_score,design = trump_voters_anes, na = TRUE))
+print(summary(anes_panel$pop_score))
+print(summary(anes_panel$pop_score_2020))
+
+print(summary(data_panel$pop_2016))
+print(summary(data_panel$pop_2020))
+```
+
+
+
+
+```{r anti-elite}
+# making etlite measure panel data ---------
+
+panel_2016 = data2016[data2016$caseid %in% data2020$caseid_harv0027,] 
+
+panel_2020 = data2020 %>% filter(!is.na(caseid_harv0027))
+
+elites2016 = panel_2016  %>% dplyr::select(caseid,weight, Q215,Q216A, Q217A, pid3,Q151_6, Q151_7, Q151_8, Q151_9, Q151_10,Q151_11, race, educ, income, age, gender)
+elites2020 = panel_2020  %>% dplyr::select(caseid_harv0027, weight_combined,weight_fresh,Q41, Q38, Q46, Q47, party_id1, Q50_6, Q50_7, Q50_8, Q50_9, Q50_10,Q50_11)
+
+data_panel = left_join(elites2016, elites2020, by = c("caseid" = "caseid_harv0027"))
+
+setDT(data_panel)
+
+# denote missing data
+data_panel[,pid3 := ifelse(pid3 >3,  NA, pid3)]
+data_panel[,Q215 := ifelse(Q215 >4,  NA, Q215)]
+data_panel[,Q151_6 := ifelse(Q151_6 >4,  NA, Q151_6)]
+data_panel[,Q151_7 := ifelse(Q151_7 >4,  NA, Q151_7)]
+data_panel[,Q151_8 := ifelse(Q151_8 >4,  NA, Q151_8)]
+data_panel[,Q151_9 := ifelse(Q151_9 >4,  NA, Q151_9)]
+data_panel[,Q151_10 := ifelse(Q151_10 >4,  NA, Q151_10)]
+data_panel[,Q151_11 := ifelse(Q151_11 >4,  NA, Q151_11)]
+
+
+data_panel[, civil_serv2016 := ifelse(Q151_6 > 1, 5 - Q151_6, Q151_6)]
+data_panel[, business2016 := ifelse(Q151_7 > 1, 5 - Q151_7, Q151_7)]
+data_panel[, bank_ceo2016 := ifelse(Q151_8 > 1, 5 - Q151_8, Q151_8)]
+data_panel[, journalist2016 := ifelse(Q151_9 > 1, 5 - Q151_9, Q151_9)]
+data_panel[, academics2016 := ifelse(Q151_10 > 1, 5 - Q151_10, Q151_10)]
+data_panel[, hollywood2016 := ifelse(Q151_11 > 1, 5 - Q151_11, Q151_11)]
+
+data_panel[, civil_serv2020 := ifelse(Q50_6 > 1, 5 - Q50_6, Q50_6)]
+data_panel[, business2020 := ifelse(Q50_7 > 1, 5 - Q50_7, Q50_7)]
+data_panel[, bank_ceo2020 := ifelse(Q50_8 > 1, 5 - Q50_8, Q50_8)]
+data_panel[, journalist2020 := ifelse(Q50_9 > 1, 5 - Q50_9, Q50_9)]
+data_panel[, academics2020 := ifelse(Q50_10 > 1, 5 - Q50_10, Q50_10)]
+data_panel[, hollywood2020 := ifelse(Q50_11 > 1, 5 - Q50_11, Q50_11)]
+
+data_panel[, civil_serv := civil_serv2020 - civil_serv2016]
+data_panel[, business := business2020 - business2016]
+data_panel[, bank_ceo := bank_ceo2020 - bank_ceo2016]
+data_panel[, journalist := journalist2020 - journalist2016]
+data_panel[, academics := academics2020 - academics2016]
+data_panel[, hollywood := hollywood2020 - hollywood2016]
+
+
+
+### change score analysis ---- 
+data_panel[,  trump_voter := ifelse(Q215 == 2, 1, 0)]
+data_panel[, bernie_voter := ifelse(Q217A == 2 & Q215 != 2, 1, 0)]
+data_panel[, non_trump_rep := ifelse(Q216A > 1 & pid3 == 2, 1, 0)]
+data_panel[, non_bernie_dem := ifelse(Q217A != 2 & pid3 ==1, 1, 0)]
+data_panel[, primary_r := ifelse(Q216A == 1, "Trump", ifelse(Q216A < 98, "Others", NA )) ]
+data_panel[, primary_d := ifelse(Q217A == 2, "Sanders", ifelse(Q217A < 98, "Others", NA )) ]
+
+# weight
+elitesPanelDesign <- svydesign(id      = ~caseid,
+                          weights = ~weight,
+                          data    = data_panel)
+
+
+# descriptive table ----
+destrump2016 = data.frame(svymean(~ civil_serv2016 + business2016 + bank_ceo2016 + journalist2016 + academics2016 + hollywood2016, subset(elitesPanelDesign, primary_r == "Trump"), na.rm = T))                
+desothers2016 = data.frame(svymean(~ civil_serv2016 + business2016 + bank_ceo2016 + journalist2016 + academics2016 + hollywood2016, subset(elitesPanelDesign, primary_r != "Trump"), na.rm = T))
+destrump2020 = data.frame(svymean(~ civil_serv2020 + business2020 + bank_ceo2020 + journalist2020 + academics2020 + hollywood2020, subset(elitesPanelDesign, primary_r == "Trump"), na.rm = T)) 
+desothers2020 = data.frame(svymean(~ civil_serv2020 + business2020 + bank_ceo2020 + journalist2020 + academics2020 + hollywood2020, subset(elitesPanelDesign, primary_r != "Trump"), na.rm = T))
+
+elites_des = cbind(destrump2016, desothers2016, destrump2020, desothers2020)
+rownames(elites_des) = c("civil_serv", "business", "bank_ceo", "journalist", "academics", "hollywood")
+
+elites_des %>%
+  kbl(format = "latex", digits = 2) %>%
+  kable_classic_2() %>%
+add_header_above(c(" " = 1, "Trump Voters" = 2, "Other Reps" = 2, "Trump Voters" = 2, "Other Reps" = 2))  %>%
+add_header_above(c(" " = 1, "2016" = 4, "2020" = 4))
+
+# regression models ----
+civil_serv_CS = svyglm(civil_serv ~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(civil_serv_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+business_CS = svyglm(business ~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(business_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+
+bankceo_CS = svyglm(bank_ceo ~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(bankceo_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+
+journalist_CS = svyglm(journalist~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(journalist_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+           
+academics_CS = svyglm(academics~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(academics_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+
+hollywood_CS = svyglm(hollywood~
+                       primary_r + as.factor(race) + as.factor(educ) + as.factor(gender)  + age + income,
+          design = elitesPanelDesign)
+names(hollywood_CS$coefficients)[2:14] = c("Vote for Trump (Primary)", 'Black','Hispanic','Asian', "Native American", "Mixed","Other", "High School", "Some College", "2-yr College", "4-yr College", "Post-grad", "Female")
+
+
+
+# plot dot and whisker ----
+civilserv_df <-
+    broom::tidy(civil_serv_CS)[2,]
+business_CS_df <-
+    broom::tidy(business_CS)[2,]
+bankceo_CS_df = broom::tidy(bankceo_CS)[2,]
+journalist_CS_df = broom::tidy(journalist_CS)[2,]
+academics_CS_df = broom::tidy(academics_CS)[2,]
+hollywood_CS_df = broom::tidy(hollywood_CS)[2,]
+
+
+many_models <- rbind(civilserv_df,business_CS_df, bankceo_CS_df, journalist_CS_df, academics_CS_df, hollywood_CS_df)
+
+many_models$term = c("Civil Servants", "Business Leaders", "Bank CEO", "Journalists", "Academics", "Hollywood")
+dwplot(many_models, ci = 0.95, vline = geom_vline(
+           xintercept = 0,
+           colour = "grey60",
+           linetype = 2)) + ggtitle("Domain Specific Anti Elite Sentiment") + ylab("") + xlab("change in anti elite sentiment (2020 - 2016)") +  theme_minimal() +  theme(legend.position = "none")
+
+# regression table ----
+stargazer(civil_serv_CS, business_CS, bankceo_CS, journalist_CS,academics_CS, hollywood_CS,format = "latex")
+
+
+
+```
